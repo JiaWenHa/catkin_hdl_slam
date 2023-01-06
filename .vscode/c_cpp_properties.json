@@ -1,0 +1,20 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/home/ros/catkin_hdl_slam/src/hdl_localization/src/hdl_localization/**",
+                "/usr/include/pcl-1.10",
+                "/home/ros/catkin_hdl_slam/src/hdl_localization/include",
+                "/opt/ros/noetic/include/**"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/clang",
+            "cStandard": "c17",
+            "cppStandard": "c++14",
+            "intelliSenseMode": "linux-clang-x64"
+        }
+    ],
+    "version": 4
+}
