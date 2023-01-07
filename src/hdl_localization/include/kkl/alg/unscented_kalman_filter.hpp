@@ -16,7 +16,7 @@ namespace kkl {
   namespace alg {
 
 /**
- * @brief Unscented Kalman Filter class
+ * @brief Unscented Kalman Filter class，初始化 UKF 的权重
  * @param T        scaler type
  * @param System   system class to be estimated
  */
@@ -39,7 +39,8 @@ public:
   /**
   * 首先，构造函数。可以看到输入了一系列包括待估计系统、状态向量维度、输入维度、观测维度、两个噪声、参数等等。完成了初始化操作。
   */
-  UnscentedKalmanFilterX(const System& system, int state_dim, int input_dim, int measurement_dim, const MatrixXt& process_noise, const MatrixXt& measurement_noise, const VectorXt& mean, const MatrixXt& cov)
+  UnscentedKalmanFilterX(const System& system, int state_dim, int input_dim, int measurement_dim, const MatrixXt& process_noise,
+                         const MatrixXt& measurement_noise, const VectorXt& mean, const MatrixXt& cov)
     : state_dim(state_dim),
     input_dim(input_dim),
     measurement_dim(measurement_dim),
@@ -83,9 +84,6 @@ public:
    * @param control  input vector
    */
   // 通过pose_estimator->predict调用。
-  /***
-   * 在每帧 imu 传入后都进行一次预测更新，在观测矫正之前我们得到了 sigma 点拟合的状态分布，而非状态转移矩阵。
-  */
   void predict() {
     // calculate sigma points.ukf的sigma点
     ensurePositiveFinite(cov);
@@ -124,13 +122,14 @@ public:
   }
 
   /**
-   * @brief predict, 带真实 imu 数据的预测
+   * @brief predict, 带真实 imu 数据的预测，在每帧 imu 传入后都进行一次预测更新，在观测矫正之前我们得到了 sigma 点拟合的状态分布，而非状态转移矩阵。
+   *        这个函数会更新 均值 和 协方差 为预测的均值和协方差。这里的均值和协方差 描述的是 预测的下一时刻机器人状态的高斯分布
    * @param control  input vector
    */
   void predict(const VectorXt& control) {
-    // calculate sigma points
+    // calculate sigma points，ukf的sigma点
     ensurePositiveFinite(cov);
-    computeSigmaPoints(mean, cov, sigma_points);
+    computeSigmaPoints(mean, cov, sigma_points);//根据均值，协方差计算 sigma 点，并保存在  sigma_points 中
     for (int i = 0; i < S; i++) {
       sigma_points.row(i) = system.f(sigma_points.row(i), control);
     }
@@ -138,11 +137,13 @@ public:
     const auto& R = process_noise;
 
     // unscented transform
+    //定义预测后的 均值 和 协方差，并初始化为 0
     VectorXt mean_pred(mean.size());
     MatrixXt cov_pred(cov.rows(), cov.cols());
-
     mean_pred.setZero();
     cov_pred.setZero();
+
+    // 计算预测的均值 和 协方差
     for (int i = 0; i < S; i++) {
       mean_pred += weights[i] * sigma_points.row(i);
     }
@@ -157,7 +158,7 @@ public:
   }
 
   /**
-   * @brief correct
+   * @brief correct。用 NDT 配准后的位姿变换矩阵 来修正 机器人的状态
    * @param measurement  measurement vector
    */
   void correct(const VectorXt& measurement) {
@@ -166,9 +167,9 @@ public:
     //状态扩增，即先更新预测值的协方差矩阵，将上一部分用sigma点拟合的协方差加上测量噪声
     VectorXt ext_mean_pred = VectorXt::Zero(N + K, 1);
     MatrixXt ext_cov_pred = MatrixXt::Zero(N + K, N + K);
-    //左上角N行1列
+    //左上角N行1列 --> 状态值
     ext_mean_pred.topLeftCorner(N, 1) = VectorXt(mean);
-    //左上角N行N列
+    //左上角N行N列 --> 状态的协方差
     ext_cov_pred.topLeftCorner(N, N) = MatrixXt(cov);
     //右下角K行K列。初始化为在pose_estimator输入的噪声。位置噪声0.01，四元数0.001
     ext_cov_pred.bottomRightCorner(K, K) = measurement_noise;
@@ -177,7 +178,7 @@ public:
     //验证并计算
     //拟合状态扩增后的均值与协方差，也就是再算一遍sigma点
     ensurePositiveFinite(ext_cov_pred);
-    //利用扩展状态空间的参数计算sigma点
+    //利用扩展状态空间的参数计算sigma点。加入观测后的。
     computeSigmaPoints(ext_mean_pred, ext_cov_pred, ext_sigma_points);
 
     // unscented transform
@@ -308,10 +309,9 @@ private:
   }
 
   /**
-   * @brief make covariance matrix positive finite
+   * @brief make covariance matrix positive finite。保证协方差的正有限。未实际应用。
    * @param cov  covariance matrix
    */
-  // 保证协方差的正有限。未实际应用。
   void ensurePositiveFinite(MatrixXt& cov) {
     return;
     //就到这里了，在上面就return掉了。

@@ -352,6 +352,7 @@ private:
 
   /**
    * @brief perform global localization to relocalize the sensor position
+   *        这个功能的用处是什么？使用这个功能后定位更加错乱
    * @param
    */
   bool relocalize(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& res) {

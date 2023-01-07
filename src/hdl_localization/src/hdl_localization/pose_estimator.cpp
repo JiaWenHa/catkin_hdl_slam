@@ -8,28 +8,35 @@
 namespace hdl_localization {
 
 /**
- * @brief constructor
+ * @brief constructor  主要是进行一些初始化工作
  * @param registration        registration method
  * @param stamp               timestamp
  * @param pos                 initial position
  * @param quat                initial orientation
  * @param cool_time_duration  during "cool time", prediction is not performed
  */
-PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const ros::Time& stamp, const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration)
+PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const ros::Time& stamp, 
+                            const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration)
     : init_stamp(stamp), registration(registration), cool_time_duration(cool_time_duration) {
   last_observation = Eigen::Matrix4f::Identity();
+  /***
+   * .block<p,q>(i,j)函数
+   * p,q表示block的大小。
+   * i,j表示从矩阵中的第几个元素开始向右向下开始算起
+  */
   last_observation.block<3, 3>(0, 0) = quat.toRotationMatrix();
   last_observation.block<3, 1>(0, 3) = pos;
 
   //单位阵初始化，随后给过程噪声。
   process_noise = Eigen::MatrixXf::Identity(16, 16);
+  //middleRows(行起始，行数)
   process_noise.middleRows(0, 3) *= 1.0;
   process_noise.middleRows(3, 3) *= 1.0;
   process_noise.middleRows(6, 4) *= 0.5;
   process_noise.middleRows(10, 3) *= 1e-6;
   process_noise.middleRows(13, 3) *= 1e-6;
 
-  //测量噪声，单位阵
+  //测量噪声，随后给测量噪声
   Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(7, 7);
   measurement_noise.middleRows(0, 3) *= 0.01;
   measurement_noise.middleRows(3, 4) *= 0.001;
@@ -37,10 +44,10 @@ PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registratio
   //加权平均的位姿。
   Eigen::VectorXf mean(16);
   mean.middleRows(0, 3) = pos;
-  mean.middleRows(3, 3).setZero();
+  mean.middleRows(3, 3).setZero(); //速度设置为0
   mean.middleRows(6, 4) = Eigen::Vector4f(quat.w(), quat.x(), quat.y(), quat.z());
-  mean.middleRows(10, 3).setZero();
-  mean.middleRows(13, 3).setZero();
+  mean.middleRows(10, 3).setZero(); //加速度计的误差暂时设置为0
+  mean.middleRows(13, 3).setZero(); //陀螺仪的误差暂时设置为0
 
   //初始化协方差
   Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(16, 16) * 0.01;
@@ -70,8 +77,9 @@ void PoseEstimator::predict(const ros::Time& stamp) {
   double dt = (stamp - prev_stamp).toSec();
   prev_stamp = stamp;
 
-  //对ukf设置噪声和处理间隔。
+  //设置 ukf 的过程噪声
   ukf->setProcessNoiseCov(process_noise * dt);
+  //设置 UKF 的处理间隔
   ukf->system.dt = dt;
 
   //利用ukf预测。
@@ -85,21 +93,26 @@ void PoseEstimator::predict(const ros::Time& stamp) {
  * @param gyro     angular velocity
  */
 void PoseEstimator::predict(const ros::Time& stamp, const Eigen::Vector3f& acc, const Eigen::Vector3f& gyro) {
+  //当前与初始化的时间间隔小于设置的时间，或prev_stamp（上次更新时间）为0（未更新），或prev_stamp等于当前时间。则更新prev_stamp并跳出。
   if ((stamp - init_stamp).toSec() < cool_time_duration || prev_stamp.is_zero() || prev_stamp == stamp) {
     prev_stamp = stamp;
     return;
   }
 
+  //正常处理，首先计算dt，更新prev_stamp。
   double dt = (stamp - prev_stamp).toSec();
   prev_stamp = stamp;
 
+  //设置 ukf 的过程噪声 和 UKF的处理间隔
   ukf->setProcessNoiseCov(process_noise * dt);
   ukf->system.dt = dt;
 
+  //获取控制量
   Eigen::VectorXf control(6);
   control.head<3>() = acc;
   control.tail<3>() = gyro;
 
+  //利用ukf预测 机器人 下一时刻的状态。
   ukf->predict(control);
 }
 
@@ -153,6 +166,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Matrix4f init_guess = Eigen::Matrix4f::Identity();
 
   if(!odom_ukf) {
+    //matrix() 得到的是机器人当前的位姿的 齐次矩阵
     init_guess = imu_guess = matrix();
   } else {
     imu_guess = matrix();
@@ -187,30 +201,37 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 
   //点云的配准。ndt
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
-  registration->setInputSource(cloud);
+  registration->setInputSource(cloud); //设置输入的点云
+  /**
+   * 调用配准算法，该算法输入为 UKF预测的机器人状态估计 并返回转换后的源(输入)作为输出。
+   * 进行ndt配准,计算变换矩阵。 aligned: 存储input_cloud经过配准后的点云
+   * (由于input_cloud被极大的降采样了,因此这个数据没什么用) 。此处 aligned 不能作为最终的源点云变换，因为对源点云进行了滤波处理
+  */
   registration->align(*aligned, init_guess);
 
   //读取数据
-  Eigen::Matrix4f trans = registration->getFinalTransformation();
-  Eigen::Vector3f p = trans.block<3, 1>(0, 3);
-  Eigen::Quaternionf q(trans.block<3, 3>(0, 0));
+  Eigen::Matrix4f trans = registration->getFinalTransformation(); //估计的变换矩阵
+  Eigen::Vector3f p = trans.block<3, 1>(0, 3); //读出平移量
+  Eigen::Quaternionf q(trans.block<3, 3>(0, 0)); //读出旋转量
 
   if(quat().coeffs().dot(q.coeffs()) < 0.0f) {
     q.coeffs() *= -1.0f;
   }
 
-  //填充至观测矩阵observation
+  //填充至观测矩阵observation --> 观测矩阵中保存的是进行点云配准后得到的位姿变换矩阵
   Eigen::VectorXf observation(7);
   observation.middleRows(0, 3) = p;
   observation.middleRows(3, 4) = Eigen::Vector4f(q.w(), q.x(), q.y(), q.z());
-  last_observation = trans;
+  last_observation = trans; //保存一下的观测到的位姿变换矩阵
 
+  //TODO:这句话用来干什么的？
   wo_pred_error = no_guess.inverse() * registration->getFinalTransformation();
 
-  //ukf更新
+  //使用ukf更新
   ukf->correct(observation);
   imu_pred_error = imu_guess.inverse() * registration->getFinalTransformation();
 
+  //下面的语句只有当使用轮式里程计的时候才会用到
   if(odom_ukf) {
     if (observation.tail<4>().dot(odom_ukf->mean.tail<4>()) < 0.0) {
       odom_ukf->mean.tail<4>() *= -1.0;
@@ -228,6 +249,8 @@ ros::Time PoseEstimator::last_correction_time() const {
   return last_correction_stamp;
 }
 
+// 从 UKF 的 mean 中获取 机器人的位置
+// 函数后面加 const 表示函数不可以修改 class 的成员
 Eigen::Vector3f PoseEstimator::pos() const {
   return Eigen::Vector3f(ukf->mean[0], ukf->mean[1], ukf->mean[2]);
 }
@@ -236,10 +259,12 @@ Eigen::Vector3f PoseEstimator::vel() const {
   return Eigen::Vector3f(ukf->mean[3], ukf->mean[4], ukf->mean[5]);
 }
 
+// 从 UKF 的 mean 中获取 机器人的姿态
 Eigen::Quaternionf PoseEstimator::quat() const {
   return Eigen::Quaternionf(ukf->mean[6], ukf->mean[7], ukf->mean[8], ukf->mean[9]).normalized();
 }
 
+//matrix() 函数得到机器人位姿的齐次矩阵
 Eigen::Matrix4f PoseEstimator::matrix() const {
   Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
   m.block<3, 3>(0, 0) = quat().toRotationMatrix();

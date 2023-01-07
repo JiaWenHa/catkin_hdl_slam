@@ -1,4 +1,4 @@
-// 该文件定义了类 PoseEstimator
+// 该文件定义了类 PoseEstimatorregistration
 #ifndef POSE_ESTIMATOR_HPP
 #define POSE_ESTIMATOR_HPP
 
@@ -26,6 +26,7 @@ class OdomSystem;
  */
 class PoseEstimator {
 public:
+  //using 可以作为 typedef 使用
   using PointT = pcl::PointXYZI;
 
   /**
@@ -36,7 +37,8 @@ public:
    * @param quat                initial orientation
    * @param cool_time_duration  during "cool time", prediction is not performed
    */
-  PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const ros::Time& stamp, const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration = 1.0);
+  PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const ros::Time& stamp, 
+                const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration = 1.0);
   ~PoseEstimator();
 
   /**

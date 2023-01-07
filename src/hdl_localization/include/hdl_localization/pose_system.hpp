@@ -66,8 +66,14 @@ public:
   }
 
   // system equation
-  //有控制量的机器人的运动方程
+  /***
+   * 有控制量的机器人的运动方程。根据机器人当前时刻的状态 和 控制量（imu的读数）计算下一时刻机器人的状态
+   * 输入参数1：state --> 当前时刻的状态
+   * 输入参数2：control --> 控制量
+   * 输出：next_state --> 下一时刻的状态
+  */
   VectorXt f(const VectorXt& state, const VectorXt& control) const {
+    // 下一时刻的状态：px, py, pz, vx, vy, vz, qx, qy, qz, qw, bax, bay, baz, bwx, bwy, bwz
     VectorXt next_state(16);
 
     Vector3t pt = state.middleRows(0, 3);
@@ -103,7 +109,7 @@ public:
     dq.normalize();
     Quaterniont qt_ = (qt * dq).normalized();
     next_state.middleRows(6, 4) << qt_.w(), qt_.x(), qt_.y(), qt_.z();
-    //将当前控制量传入下一时刻的状态向量。认为加速度和角速度上偏差不变
+    //将当前控制量传入下一时刻的状态向量。认为加速度和角速度上的偏差不变
     next_state.middleRows(10, 3) = state.middleRows(10, 3);  // constant bias on acceleration
     next_state.middleRows(13, 3) = state.middleRows(13, 3);  // constant bias on angular velocity
 
@@ -111,9 +117,8 @@ public:
   }
 
   // observation equation
-  /*
-  观测方程直接将当前输入状态量作为观测量。
-  这里的输入是在更新阶段（correct）生成的带误差方差的（error variances）的扩展状态空间下的（extended state space）状态量，也就是ext_sigma_points。
+  /***
+   * 输入参数：在更新阶段（correct）生成的带误差方差的（error variances）的扩展状态空间下的（extended state space）状态量，也就是ext_sigma_points
   */
   VectorXt h(const VectorXt& state) const {
     VectorXt observation(7);
