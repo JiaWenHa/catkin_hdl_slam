@@ -33,6 +33,8 @@
 #include <pclomp/ndt_omp.h>
 #include <fast_gicp/ndt/ndt_cuda.hpp>
 
+#include <pclomp/gicp_omp.h> //MODIFY:自己添加的
+
 #include <hdl_localization/pose_estimator.hpp>
 #include <hdl_localization/delta_estimater.hpp>
 
@@ -72,19 +74,21 @@ public:
     invert_gyro = private_nh.param<bool>("invert_gyro", false);
     if (use_imu) { //如果使用imu，则定义订阅函数。
       NODELET_INFO("enable imu-based prediction");
+      // "/gpsimu_driver/imu_data" 在launch 文件中被 remap 了
       imu_sub = mt_nh.subscribe("/gpsimu_driver/imu_data", 256, &HdlLocalizationNodelet::imu_callback, this);
     }
     //点云数据、全局地图、初始位姿的订阅。initialpose_sub只是用于rviz划点用的。
+    //输入点云，输出经过 UKF 滤波 和 NDT 配准后的机器人位姿
     points_sub = mt_nh.subscribe("/velodyne_points", 5, &HdlLocalizationNodelet::points_callback, this);
-    globalmap_sub = nh.subscribe("/globalmap", 1, &HdlLocalizationNodelet::globalmap_callback, this);
-    initialpose_sub = nh.subscribe("/initialpose", 8, &HdlLocalizationNodelet::initialpose_callback, this);
+    globalmap_sub = nh.subscribe("/globalmap", 1, &HdlLocalizationNodelet::globalmap_callback, this); //获取全局地图
+    initialpose_sub = nh.subscribe("/initialpose", 8, &HdlLocalizationNodelet::initialpose_callback, this);//用于在rviz中初始化位姿
 
     //发布里程计信息，以及对齐后的点云数据。
-    pose_pub = nh.advertise<nav_msgs::Odometry>("/odom", 5, false);
-    aligned_pub = nh.advertise<sensor_msgs::PointCloud2>("/aligned_points", 5, false);
+    pose_pub = nh.advertise<nav_msgs::Odometry>("/odom", 5, false); //初始化位姿话题发布对象发布的话题名为"/odom"
+    aligned_pub = nh.advertise<sensor_msgs::PointCloud2>("/aligned_points", 5, false); // "aligned_points" -> 当前点云配准到全局地图坐标系后的点云
     status_pub = nh.advertise<ScanMatchingStatus>("/status", 5, false);
 
-    // global localization
+    // global localization  --> 已经屏蔽了，当前版本未使用
     use_global_localization = private_nh.param<bool>("use_global_localization", true);
     if(use_global_localization) {
       NODELET_INFO_STREAM("wait for global localization services");
@@ -112,6 +116,7 @@ private:
       pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr ndt(new pclomp::NormalDistributionsTransform<PointT, PointT>());
       ndt->setTransformationEpsilon(0.01);//为终止条件设置最小转换差异
       ndt->setResolution(ndt_resolution);//设置NDT网格结构的分辨率
+      //ndt 搜索方法。默认是 DIRECT7，作者说效果不好可以尝试改为 DIRECT1
       if (ndt_neighbor_search_method == "DIRECT1") {
         NODELET_INFO("search_method DIRECT1 is selected");
         ndt->setNeighborhoodSearchMethod(pclomp::DIRECT1);
@@ -121,7 +126,11 @@ private:
       } else {
         if (ndt_neighbor_search_method == "KDTREE") {
           NODELET_INFO("search_method KDTREE is selected");
-        } else {
+        } else if (ndt_neighbor_search_method == "GICP_OMP"){ //MODIFY:这个是我自己添加的,GICP未成功
+          NODELET_INFO("search_method GICP_OMP is selected");
+          pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>::Ptr gicp(new pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>());
+          return gicp;
+        }else {
           NODELET_WARN("invalid search method was given");
           NODELET_WARN("default method is selected (KDTREE)");
         }
@@ -166,7 +175,7 @@ private:
     boost::shared_ptr<pcl::VoxelGrid<PointT>> voxelgrid(new pcl::VoxelGrid<PointT>());
     // 设置每个体素的大小, leaf_size分别为lx ly lz的长 宽 高
     voxelgrid->setLeafSize(downsample_resolution, downsample_resolution, downsample_resolution);
-    // 给点云体素化取了个别名
+    // 用于对点云进行降采样
     downsample_filter = voxelgrid;
 
     NODELET_INFO("create registration method for localization");
@@ -206,7 +215,7 @@ private:
   }
 
   /**
-   * @brief callback for point cloud data.输入点云输出位姿。
+   * @brief callback for point cloud data.输入点云，输出位姿。
    *        
    * @param points_msg
    */
@@ -234,7 +243,7 @@ private:
       return;
     }
 
-    //将点云转换到 odom_child_frame_id 坐标系。
+    //将点云转换到 odom_child_frame_id 坐标系 -> velodyne 坐标系。
     // transform pointcloud into odom_child_frame_id
     std::string tfError;
     pcl::PointCloud<PointT>::Ptr cloud(new pcl::PointCloud<PointT>());
@@ -260,7 +269,7 @@ private:
 
     Eigen::Matrix4f before = pose_estimator->matrix();
 
-    // predict
+    // predict 利用两帧点云之间的所有 imu 的读数
     if(!use_imu) {
       pose_estimator->predict(stamp);
     } else {
@@ -268,7 +277,7 @@ private:
       auto imu_iter = imu_data.begin();
       //利用imu数据迭代。
       for(imu_iter; imu_iter != imu_data.end(); imu_iter++) {
-        // 若当前点云时间早于imu雷达，则跳出。imu做预测，点云观测。
+        // 若当前点云时间 小于 imu 雷达，则跳出。imu做预测，点云观测。
         if(stamp < (*imu_iter)->header.stamp) {
           break;
         }
@@ -285,7 +294,7 @@ private:
       imu_data.erase(imu_data.begin(), imu_iter);
     }
 
-    // odometry-based prediction
+    // odometry-based prediction --> 未使用
     ros::Time last_correction_time = pose_estimator->last_correction_time();
     if(private_nh.param<bool>("enable_robot_odometry_prediction", false) && !last_correction_time.isZero()) {
       geometry_msgs::TransformStamped odom_delta;
@@ -305,6 +314,7 @@ private:
 
     // correct
     //用pose_estimator 来矫正点云。pcl库配准。获取到结果后利用ukf矫正位姿。
+    // aligned 是 当前点云配准到点云地图坐标系后的点云
     auto aligned = pose_estimator->correct(stamp, filtered);
     //如果有订阅才发布
     if(aligned_pub.getNumSubscribers()) {
@@ -322,7 +332,9 @@ private:
   }
 
   /**
-   * @brief callback for globalmap input.完成了对全局地图的订阅以及从ros消息到点云的转化。
+   * @brief callback for globalmap input.
+   *        完成了对全局地图的订阅以及从ros消息到点云地图的转化。并将其设置为点云配准过程中的目标点云
+   *        目标点云可以理解为起始点云，后面采集到的所有的点云都与该目标点云进行配准
    * @param points_msg
    */
   void globalmap_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
@@ -336,7 +348,7 @@ private:
     // 发布出来的全局地图用作配准用的目标点云。这里就是globalmap_server_nodelet发出来的
     registration->setInputTarget(globalmap);
 
-    //TODO: 这一句是干什么的？以前的版本里面没有
+    //hdl_global_localization时使用，目前未使用，可以不管
     if(use_global_localization) {
       NODELET_INFO("set globalmap for global localization!");
       hdl_global_localization::SetGlobalMap srv;
@@ -447,17 +459,23 @@ private:
    */
   void publish_odometry(const ros::Time& stamp, const Eigen::Matrix4f& pose) {
     // broadcast the transform over tf
+    // robot_odom_frame_id -> odom, odom_child_frame_id -> velodyne
+    // 测试 velodyne 坐标系 能不能坐标转换到 odom 坐标系，ros::Time(0)表示使用缓冲中最新的tf数据
+    //TODO:下面这个 if 语句是用来干什么的？
     if(tf_buffer.canTransform(robot_odom_frame_id, odom_child_frame_id, ros::Time(0))) {
+      //Eigen::Isometry3d 是一个 4*4 的矩阵 ，eigenToTransform -> Convert an Eigen Isometry3d transform to the equivalent geometry_msgs message type.
       geometry_msgs::TransformStamped map_wrt_frame = tf2::eigenToTransform(Eigen::Isometry3d(pose.inverse().cast<double>()));
       map_wrt_frame.header.stamp = stamp;
       map_wrt_frame.header.frame_id = odom_child_frame_id;
       map_wrt_frame.child_frame_id = "map";
 
+      // 查找 velodyne 坐标系 转到 odom 坐标系 的坐标变换
       geometry_msgs::TransformStamped frame_wrt_odom = tf_buffer.lookupTransform(robot_odom_frame_id, odom_child_frame_id, ros::Time(0), ros::Duration(0.1));
+      // tf2::transformToEigen -> Convert a timestamped transform to the equivalent Eigen data type.
       Eigen::Matrix4f frame2odom = tf2::transformToEigen(frame_wrt_odom).cast<float>().matrix();
 
       geometry_msgs::TransformStamped map_wrt_odom;
-      tf2::doTransform(map_wrt_frame, map_wrt_odom, frame_wrt_odom);
+      tf2::doTransform(map_wrt_frame, map_wrt_odom, frame_wrt_odom); //把机器人的位姿转换到 以odom 为坐标系下
 
       tf2::Transform odom_wrt_map;
       tf2::fromMsg(map_wrt_odom.transform, odom_wrt_map);
@@ -478,7 +496,7 @@ private:
       tf_broadcaster.sendTransform(odom_trans);
     }
 
-    // publish the transform
+    // publish the transform。把机器人位姿信息 变成里程计信息 发布出去
     nav_msgs::Odometry odom;
     odom.header.stamp = stamp;
     odom.header.frame_id = "map";
@@ -560,7 +578,7 @@ private:
   ros::Subscriber globalmap_sub;
   ros::Subscriber initialpose_sub;
 
-  ros::Publisher pose_pub;
+  ros::Publisher pose_pub; // 位姿话题发布对象
   ros::Publisher aligned_pub;
   ros::Publisher status_pub;
 

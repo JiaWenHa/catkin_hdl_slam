@@ -264,7 +264,7 @@ Eigen::Quaternionf PoseEstimator::quat() const {
   return Eigen::Quaternionf(ukf->mean[6], ukf->mean[7], ukf->mean[8], ukf->mean[9]).normalized();
 }
 
-//matrix() 函数得到机器人位姿的齐次矩阵
+//matrix() 函数 用于获取 经过UKF滤波后机器人位姿的齐次矩阵
 Eigen::Matrix4f PoseEstimator::matrix() const {
   Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
   m.block<3, 3>(0, 0) = quat().toRotationMatrix();
