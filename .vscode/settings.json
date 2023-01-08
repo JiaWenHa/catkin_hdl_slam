@@ -42,6 +42,7 @@
         "numeric": "cpp",
         "ratio": "cpp",
         "tuple": "cpp",
-        "version": "cpp"
+        "version": "cpp",
+        "memory": "cpp"
     }
 }

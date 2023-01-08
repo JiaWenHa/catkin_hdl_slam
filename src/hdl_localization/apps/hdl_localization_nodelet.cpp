@@ -34,6 +34,7 @@
 #include <fast_gicp/ndt/ndt_cuda.hpp>
 
 #include <pclomp/gicp_omp.h> //MODIFY:自己添加的
+#include <pcl/registration/gicp.h> //MODIFY:自己添加的
 
 #include <hdl_localization/pose_estimator.hpp>
 #include <hdl_localization/delta_estimater.hpp>
@@ -118,6 +119,11 @@ private:
       ndt->setTransformationEpsilon(0.01);//为终止条件设置最小转换差异
       ndt->setResolution(ndt_resolution);//设置NDT网格结构的分辨率
       //ndt 搜索方法。默认是 DIRECT7，作者说效果不好可以尝试改为 DIRECT1
+      /**
+       * If you select pclomp::KDTREE, results will be completely same as the original pcl::NDT. 
+       * We recommend to use pclomp::DIRECT7 which is faster and stable. 
+       * If you need extremely fast registration, choose pclomp::DIRECT1, but it might be a bit unstable.
+      */
       if (ndt_neighbor_search_method == "DIRECT1") {
         NODELET_INFO("search_method DIRECT1 is selected");
         ndt->setNeighborhoodSearchMethod(pclomp::DIRECT1);
@@ -127,9 +133,13 @@ private:
       } else {
         if (ndt_neighbor_search_method == "KDTREE") {
           NODELET_INFO("search_method KDTREE is selected");
-        } else if (ndt_neighbor_search_method == "GICP_OMP"){ //MODIFY:这个是我自己添加的,GICP未成功
+        } else if (ndt_neighbor_search_method == "GICP_OMP"){ //MODIFY:这个是我自己添加的,未成功
           NODELET_INFO("search_method GICP_OMP is selected");
           pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>::Ptr gicp(new pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>());
+          return gicp;
+        }else if (ndt_neighbor_search_method == "GICP") { //MODIFY:这个是我自己添加的,已成功
+          NODELET_INFO("search_method PCL GICP is selected");
+          pcl::GeneralizedIterativeClosestPoint<PointT, PointT>::Ptr gicp(new pcl::GeneralizedIterativeClosestPoint<PointT, PointT>());
           return gicp;
         }else {
           NODELET_WARN("invalid search method was given");
