@@ -130,7 +130,6 @@ private:
         } else if (ndt_neighbor_search_method == "GICP_OMP"){ //MODIFY:这个是我自己添加的,GICP未成功
           NODELET_INFO("search_method GICP_OMP is selected");
           pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>::Ptr gicp(new pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>());
-          gicp->setSearchMethodSource(pclomp::KDTREE);
           return gicp;
         }else {
           NODELET_WARN("invalid search method was given");
