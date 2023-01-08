@@ -63,10 +63,10 @@ public:
     //初始化点云配准方法为NDT_OMP, 以前的版本有 GICP_OMP，这一版本没有，不知道为什么
     initialize_params();
 
+    // 获取外部参数
     robot_odom_frame_id = private_nh.param<std::string>("robot_odom_frame_id", "robot_odom");
     // 这个默认的base_link, launch里覆盖了。实际上是velodyne。
     odom_child_frame_id = private_nh.param<std::string>("odom_child_frame_id", "base_link");
-
     // 是否使用imu
     use_imu = private_nh.param<bool>("use_imu", true);
     // imu是否倒置
@@ -77,6 +77,7 @@ public:
       // "/gpsimu_driver/imu_data" 在launch 文件中被 remap 了
       imu_sub = mt_nh.subscribe("/gpsimu_driver/imu_data", 256, &HdlLocalizationNodelet::imu_callback, this);
     }
+
     //点云数据、全局地图、初始位姿的订阅。initialpose_sub只是用于rviz划点用的。
     //输入点云，输出经过 UKF 滤波 和 NDT 配准后的机器人位姿
     points_sub = mt_nh.subscribe("/velodyne_points", 5, &HdlLocalizationNodelet::points_callback, this);
@@ -129,6 +130,7 @@ private:
         } else if (ndt_neighbor_search_method == "GICP_OMP"){ //MODIFY:这个是我自己添加的,GICP未成功
           NODELET_INFO("search_method GICP_OMP is selected");
           pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>::Ptr gicp(new pclomp::GeneralizedIterativeClosestPoint<PointT, PointT>());
+          gicp->setSearchMethodSource(pclomp::KDTREE);
           return gicp;
         }else {
           NODELET_WARN("invalid search method was given");
@@ -181,7 +183,7 @@ private:
     NODELET_INFO("create registration method for localization");
     registration = create_registration();
 
-    // global localization
+    // global localization 
     NODELET_INFO("create registration method for fallback during relocalization");
     relocalizing = false;
     delta_estimater.reset(new DeltaEstimater(create_registration()));
